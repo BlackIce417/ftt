@@ -4,8 +4,13 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <fstream>
+#include <getopt.h>
 
-int create_data_connection(int ctrl_sockfd) {
+#define FTP_PORT 21
+#define BACKLOG 5
+
+int create_data_connection(int ctrl_sockfd)
+{
     // 发送 PASV 命令
     std::string pasv_cmd = "PASV\r\n";
     send(ctrl_sockfd, pasv_cmd.c_str(), pasv_cmd.size(), 0);
@@ -15,10 +20,10 @@ int create_data_connection(int ctrl_sockfd) {
     std::cout << "PASV Response: " << buffer << std::endl;
 
     // 解析 PASV 响应
-    int h1,h2,h3,h4,p1,p2;
-    sscanf(buffer, "227 Entering Passive Mode (%d,%d,%d,%d,%d,%d)", &h1,&h2,&h3,&h4,&p1,&p2);
-    std::string ip = std::to_string(h1)+"."+std::to_string(h2)+"."+std::to_string(h3)+"."+std::to_string(h4);
-    int port = p1*256 + p2;
+    int h1, h2, h3, h4, p1, p2;
+    sscanf(buffer, "227 Entering Passive Mode (%d,%d,%d,%d,%d,%d)", &h1, &h2, &h3, &h4, &p1, &p2);
+    std::string ip = std::to_string(h1) + "." + std::to_string(h2) + "." + std::to_string(h3) + "." + std::to_string(h4);
+    int port = p1 * 256 + p2;
 
     // 创建数据 socket
     int data_sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -27,7 +32,8 @@ int create_data_connection(int ctrl_sockfd) {
     data_addr.sin_port = htons(port);
     inet_pton(AF_INET, ip.c_str(), &data_addr.sin_addr);
 
-    if (connect(data_sockfd, (sockaddr*)&data_addr, sizeof(data_addr)) < 0) {
+    if (connect(data_sockfd, (sockaddr *)&data_addr, sizeof(data_addr)) < 0)
+    {
         std::cerr << "连接数据端口失败\n";
         return -1;
     }
@@ -35,15 +41,16 @@ int create_data_connection(int ctrl_sockfd) {
     return data_sockfd;
 }
 
-
-int main() {
+int client()
+{
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in server_addr{};
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(21);
     inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr);
 
-    if (connect(sockfd, (sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+    if (connect(sockfd, (sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    {
         std::cerr << "连接失败\n";
         return 1;
     }
@@ -63,14 +70,16 @@ int main() {
     std::cout << "Password response: " << buffer;
 
     int data_sockfd = create_data_connection(sockfd);
-    if (data_sockfd < 0) {
+    if (data_sockfd < 0)
+    {
         std::cerr << "创建数据连接失败\n";
         close(sockfd);
         return 1;
     }
 
     std::ifstream file("./test.txt", std::ios::binary);
-    if (!file.is_open()) {
+    if (!file.is_open())
+    {
         std::cerr << "文件打开失败\n";
         close(sockfd);
         close(data_sockfd);
@@ -85,12 +94,15 @@ int main() {
     std::cout << "开始上传文件...\n";
 
     char file_buffer[1024];
-    while (!file.eof()) {
+    while (!file.eof())
+    {
         file.read(file_buffer, sizeof(file_buffer));
         std::streamsize bytes = file.gcount();
-        if (bytes > 0) {
+        if (bytes > 0)
+        {
             ssize_t send_bytes = send(data_sockfd, file_buffer, bytes, 0);
-            if (send_bytes < 0) {
+            if (send_bytes < 0)
+            {
                 std::cerr << "发送文件数据失败\n";
                 break;
             }
@@ -104,5 +116,90 @@ int main() {
     file.close();
     close(data_sockfd);
     close(sockfd);
+    return 0;
+}
+
+int server(std::string ip = "127.0.0.1")
+{
+    int listen_fd, client_fd;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t sin_size;
+
+    listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (listen_fd == -1)
+    {
+        perror("socket");
+        return 1;
+    }
+
+    int opt = 1;
+    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(FTP_PORT);
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    if (bind(listen_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    {
+        perror("bind");
+        close(listen_fd);
+        return 1;
+    }
+
+    if (listen(listen_fd, BACKLOG) < -1)
+    {
+        perror("listen");
+        close(listen_fd);
+        return 1;
+    }
+
+    printf("FTP server is listening to port %d .\n", FTP_PORT);
+
+    while (true)
+    {
+        sin_size = sizeof(client_addr);
+        client_fd = accept(listen_fd, (struct sockadrr *)&client_addr, &sin_size);
+        if (client_fd < 0) 
+        {
+            perror("accept");
+            continue;
+        }
+    }
+
+    printf("New client connected: %s.\n", inet_ntoa(client_addr.sin_addr));
+
+    return 0;
+}
+
+int main(int argc, char *argv[])
+{
+    static struct option long_options[] =
+        {
+            {"server_mode", no_argument, nullptr, 's'},
+            {"client_mode", no_argument, nullptr, 'c'},
+            {"ip", required_argument, nullptr, 'ip'},
+            {"port", required_argument, nullptr, 'p'},
+            {"help", no_argument, nullptr, 'h'},
+        };
+    int opt = 0;
+    std::string ip = "127.0.0.1";
+    int port = 21;
+    while ((opt = getopt_long(argc, argv, "sch", long_options, nullptr)) != -1)
+    {
+        switch (opt)
+        {
+        case 's':
+            std::cout << "Option s (server_mode) selected\n";
+            break;
+        case 'c':
+            std::cout << "Option c (client_mode) selected\n";
+            break;
+        case 'h':
+            std::cout << "Option h (help) selected\n";
+            break;
+        default:
+            std::cerr << "Unknown option\n";
+            return 1;
+        }
+    }
     return 0;
 }
